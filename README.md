@@ -245,36 +245,6 @@ output/last-error.txt
 - `samples/`：本地导入样例
 - `.github/workflows/ci.yml`：GitHub Actions 自检
 
-## GitHub 发布建议
-
-仓库里已经通过 `.gitignore` 排除了这些本地文件：
-
-- `config/spotify.json`
-- `data/`
-- `output/`
-
-所以你可以安全地提交样例、脚本和文档，而不会把本地 token、报告和抓取结果一起推上去。
-
-推荐发布步骤：
-
-```powershell
-git init
-git add .
-git commit -m "Initial commit"
-```
-
-然后推到 GitHub 即可。
-
-## GitHub Actions
-
-当前 CI 会在 Windows runner 上执行样例解析自检：
-
-- `inspect-source csv`
-- `inspect-source netease-json`
-- `inspect-source qqmusic-json`
-
-这样至少能保证样例输入格式和核心解析器不会在公开仓库里直接坏掉。
-
 ## 注意事项
 
 - 本项目不下载歌曲音频，只迁移歌单元数据。
