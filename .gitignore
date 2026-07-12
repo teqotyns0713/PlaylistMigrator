@@ -1,0 +1,11 @@
+# Local Spotify credentials
+config/spotify.json
+
+# Generated runtime data
+data/
+output/
+config/output/
+
+# Windows noise
+Thumbs.db
+Desktop.ini

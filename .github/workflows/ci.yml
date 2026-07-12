@@ -1,0 +1,19 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  powershell-smoke-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate sample importers
+        shell: pwsh
+        run: |
+          ./migrate.ps1 inspect-source csv -SourcePath ./samples/generic-playlist.csv
+          ./migrate.ps1 inspect-source netease-json -SourcePath ./samples/netease-playlist.json
+          ./migrate.ps1 inspect-source qqmusic-json -SourcePath ./samples/qqmusic-playlist.json
+

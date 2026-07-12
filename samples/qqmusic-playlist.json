@@ -1,0 +1,27 @@
+{
+  "dissname": "QQ Music Sample Playlist",
+  "songlist": [
+    {
+      "songmid": "003OUlho2HcRHC",
+      "songname": "Qi Li Xiang",
+      "singer": [
+        {
+          "name": "Jay Chou"
+        }
+      ],
+      "albumname": "Common Jasmine Orange",
+      "interval": 301
+    },
+    {
+      "songmid": "0025NhlN2yWrP4",
+      "songname": "Ye Qu",
+      "singer": [
+        {
+          "name": "Jay Chou"
+        }
+      ],
+      "albumname": "November's Chopin",
+      "interval": 233
+    }
+  ]
+}

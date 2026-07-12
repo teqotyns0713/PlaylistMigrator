@@ -1,0 +1,10 @@
+{
+  "clientId": "YOUR_SPOTIFY_CLIENT_ID",
+  "redirectUri": "http://127.0.0.1:8898/callback/",
+  "tokenPath": "../data/spotify-token.json",
+  "defaultMarket": "",
+  "scopes": [
+    "playlist-modify-private",
+    "playlist-modify-public"
+  ]
+}

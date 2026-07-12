@@ -1,0 +1,32 @@
+{
+  "name": "NetEase Sample Playlist",
+  "tracks": [
+    {
+      "id": 186016,
+      "name": "Qing Tian",
+      "artists": [
+        {
+          "name": "Jay Chou"
+        }
+      ],
+      "album": {
+        "name": "Yeh Hui Mei"
+      },
+      "duration": 269000,
+      "isrc": "CNXXXXXXXXXX"
+    },
+    {
+      "id": 185809,
+      "name": "Dao Xiang",
+      "artists": [
+        {
+          "name": "Jay Chou"
+        }
+      ],
+      "album": {
+        "name": "Capricorn"
+      },
+      "duration": 223000
+    }
+  ]
+}
