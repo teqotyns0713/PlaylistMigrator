@@ -1,19 +1,39 @@
+<#
+.SYNOPSIS
+Migrate QQ Music and NetEase Cloud Music playlists to Spotify.
+
+.DESCRIPTION
+Supports an interactive menu, direct share-link import, and local CSV/JSON playlist imports.
+Use `.\start-migrator.cmd` for the guided flow, or call this script directly for CLI usage.
+
+.EXAMPLE
+.\start-migrator.cmd
+
+.EXAMPLE
+.\migrate.ps1 help
+
+.EXAMPLE
+.\migrate.ps1 login -OpenBrowser
+
+.EXAMPLE
+.\migrate.ps1 import-link -SourceLink "https://music.163.com/playlist?id=26467411" -PlaylistName "Imported" -OpenBrowser
+#>
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('login', 'inspect-source', 'import', 'fetch-link', 'import-link')]
+    [ValidateSet('help', 'login', 'inspect-source', 'import', 'fetch-link', 'import-link')]
     [string]$Action,
 
     [Parameter(Position = 1)]
     [ValidateSet('csv', 'generic-json', 'netease-json', 'qqmusic-json')]
     [string]$Provider = 'csv',
 
-    [string]$ConfigPath = '.\config\spotify.json',
+    [string]$ConfigPath,
     [string]$SourcePath,
     [string]$SourceLink,
     [string]$PlaylistName,
     [string]$Description,
-    [string]$ReportPath = '.\output\last-report.json',
+    [string]$ReportPath,
     [string]$OutputPath,
     [string]$Market,
     [switch]$Public,
@@ -26,6 +46,14 @@ $ErrorActionPreference = 'Stop'
 
 $modulePath = Join-Path $PSScriptRoot 'src\PlaylistMigrator.psm1'
 $errorLogPath = Join-Path $PSScriptRoot 'output\last-error.txt'
+
+if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
+    $ConfigPath = Join-Path $PSScriptRoot 'config\spotify.json'
+}
+
+if ([string]::IsNullOrWhiteSpace($ReportPath)) {
+    $ReportPath = Join-Path $PSScriptRoot 'output\last-report.json'
+}
 
 function Read-ChoiceValue {
     param(
@@ -156,9 +184,32 @@ function Read-ProviderValue {
     }
 }
 
+function Show-Usage {
+    Write-Host ''
+    Write-Host 'PlaylistMigrator' -ForegroundColor Cyan
+    Write-Host 'Move QQ Music or NetEase playlists to Spotify.'
+    Write-Host ''
+    Write-Host 'Recommended:'
+    Write-Host '  .\start-migrator.cmd'
+    Write-Host ''
+    Write-Host 'CLI commands:'
+    Write-Host '  .\migrate.ps1 help'
+    Write-Host '  .\migrate.ps1 login -OpenBrowser'
+    Write-Host '  .\migrate.ps1 fetch-link -SourceLink "<share-link>"'
+    Write-Host '  .\migrate.ps1 import-link -SourceLink "<share-link>" -PlaylistName "<name>" -OpenBrowser'
+    Write-Host '  .\migrate.ps1 inspect-source csv -SourcePath .\samples\generic-playlist.csv'
+    Write-Host '  .\migrate.ps1 import qqmusic-json -SourcePath .\samples\qqmusic-playlist.json -PlaylistName "<name>" -OpenBrowser'
+    Write-Host ''
+    Write-Host 'Tips:'
+    Write-Host '  - Run from the repository root when you use relative paths.'
+    Write-Host '  - Check output\last-error.txt if a login or import fails.'
+    Write-Host '  - Use -DryRun to preview matching without creating a Spotify playlist.'
+}
+
 function Start-InteractiveMode {
     Write-Host ''
     Write-Host 'PlaylistMigrator Interactive Mode' -ForegroundColor Cyan
+    Write-Host 'Tip: choose 2 if you want to paste a playlist link and import it directly.'
     Write-Host '1. Login to Spotify'
     Write-Host '2. Import from a playlist link to Spotify'
     Write-Host '3. Fetch a playlist link and save it as a file'
@@ -250,6 +301,10 @@ try {
     Prompt-ForMissingParameters
 
     switch ($Action) {
+        'help' {
+            Show-Usage
+        }
+
         'login' {
             $token = Connect-Spotify -ConfigPath $ConfigPath -OpenBrowser:$OpenBrowser
             Write-Host ('Spotify login succeeded. Token saved to: {0}' -f $token.TokenPath)
@@ -361,6 +416,7 @@ catch {
         ('Timestamp: {0}' -f (Get-Date).ToString('o'))
         ('Action: {0}' -f $Action)
         ('Provider: {0}' -f $Provider)
+        ('ConfigPath: {0}' -f $ConfigPath)
         ''
         'Message:'
         $_.Exception.Message

@@ -1,3 +1,5 @@
 @echo off
 setlocal
-powershell -NoExit -ExecutionPolicy Bypass -File "%~dp0migrate.ps1" %*
+pushd "%~dp0"
+powershell -NoLogo -NoExit -ExecutionPolicy Bypass -File "%~dp0migrate.ps1" %*
+popd
