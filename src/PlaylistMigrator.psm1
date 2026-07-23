@@ -6,6 +6,7 @@ $script:SpotifyApiBase = 'https://api.spotify.com/v1'
 $script:SpotifyAccountsBase = 'https://accounts.spotify.com'
 $script:SpotifyRequestTimeoutSeconds = 30
 $script:SpotifyMaxAutoRetryAfterSeconds = 60
+$script:LastSpotifySearchRequestUtc = $null
 
 function Resolve-AbsolutePath {
     param(
@@ -55,6 +56,28 @@ function Write-JsonFile {
 
     Ensure-ParentDirectory -Path $Path
     $Value | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
+function Get-ObjectPropertyValue {
+    param(
+        $Object,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        $DefaultValue = $null
+    )
+
+    if ($null -eq $Object) {
+        return $DefaultValue
+    }
+
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property -or $null -eq $property.Value) {
+        return $DefaultValue
+    }
+
+    return $property.Value
 }
 
 function ConvertTo-Base64Url {
@@ -131,6 +154,20 @@ function Resolve-Config {
     $config = Read-JsonFile -Path $resolvedConfigPath
     $configDirectory = Split-Path -Parent $resolvedConfigPath
     $tokenPath = Resolve-AbsolutePath -Path ([string]$config.tokenPath) -BaseDirectory $configDirectory
+    $searchCachePathSetting = [string](Get-ObjectPropertyValue -Object $config -Name 'searchCachePath' -DefaultValue '../data/spotify-search-cache.json')
+    if ([string]::IsNullOrWhiteSpace($searchCachePathSetting)) {
+        $searchCachePathSetting = '../data/spotify-search-cache.json'
+    }
+    $searchCachePath = Resolve-AbsolutePath -Path $searchCachePathSetting -BaseDirectory $configDirectory
+    $requestDelayMsValue = Get-ObjectPropertyValue -Object $config -Name 'requestDelayMs' -DefaultValue 350
+    if ($null -eq $requestDelayMsValue -or [string]::IsNullOrWhiteSpace([string]$requestDelayMsValue)) {
+        $requestDelayMsValue = 350
+    }
+    $requestDelayMs = [int]$requestDelayMsValue
+    if ($requestDelayMs -lt 0) {
+        throw 'requestDelayMs must be 0 or greater in config/spotify.json.'
+    }
+
     $redirectUri = Normalize-RedirectUri -RedirectUri ([string]$config.redirectUri)
     $clientId = [string]$config.clientId
     if ([string]::IsNullOrWhiteSpace($clientId)) {
@@ -143,6 +180,8 @@ function Resolve-Config {
         ClientId      = $clientId
         RedirectUri   = $redirectUri
         TokenPath     = $tokenPath
+        SearchCachePath = $searchCachePath
+        RequestDelayMs = $requestDelayMs
         DefaultMarket = [string]$config.defaultMarket
         Scopes        = @($config.scopes)
     }
@@ -654,6 +693,177 @@ function Invoke-SpotifyApi {
 
         throw (Get-HttpErrorMessage -ErrorRecord $_ -Context ('Spotify API request failed for {0} {1}' -f ([string]$Method).ToUpperInvariant(), $Endpoint))
     }
+}
+
+function New-SpotifySearchCacheKey {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Query
+    )
+
+    $parts = foreach ($key in @($Query.Keys | Sort-Object)) {
+        '{0}={1}' -f [string]$key, [string]$Query[$key]
+    }
+
+    $canonicalQuery = 'spotify-search-v1|' + ($parts -join '&')
+    return ConvertTo-Base64Url -Bytes (Get-Sha256Bytes -Value $canonicalQuery)
+}
+
+function Import-SpotifySearchCache {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $entries = @{}
+    if (Test-Path -LiteralPath $Path) {
+        try {
+            $cacheFile = Read-JsonFile -Path $Path
+            $entriesObject = Get-ObjectPropertyValue -Object $cacheFile -Name 'entries'
+            if ($entriesObject) {
+                foreach ($property in $entriesObject.PSObject.Properties) {
+                    $entries[$property.Name] = $property.Value
+                }
+            }
+        }
+        catch {
+            Write-Warning ("Unable to read Spotify search cache. A new cache will be created at {0}. Error: {1}" -f $Path, $_.Exception.Message)
+        }
+    }
+
+    return [PSCustomObject]@{
+        Path   = $Path
+        Entries = $entries
+        Hits   = 0
+        Misses = 0
+        Writes = 0
+    }
+}
+
+function Save-SpotifySearchCache {
+    param(
+        [Parameter(Mandatory = $true)]
+        $SearchCache
+    )
+
+    if ($null -eq $SearchCache -or [string]::IsNullOrWhiteSpace([string]$SearchCache.Path)) {
+        return
+    }
+
+    Write-JsonFile -Path ([string]$SearchCache.Path) -Value ([PSCustomObject]@{
+        version      = 1
+        updatedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+        entries      = $SearchCache.Entries
+    })
+}
+
+function ConvertTo-SpotifySearchCacheResponse {
+    param(
+        $Response
+    )
+
+    $items = foreach ($item in @((Get-NestedPropertyValue -Object $Response -Path 'tracks.items'))) {
+        if ($null -eq $item) {
+            continue
+        }
+
+        $artistsValue = Get-NestedPropertyValue -Object $item -Path 'artists'
+        $artists = @()
+        if ($artistsValue) {
+            $artists = @($artistsValue | ForEach-Object {
+                    $artistName = [string](Get-NestedPropertyValue -Object $_ -Path 'name')
+                    if (-not [string]::IsNullOrWhiteSpace($artistName)) {
+                        [PSCustomObject]@{
+                            name = $artistName
+                        }
+                    }
+                })
+        }
+
+        [PSCustomObject]@{
+            id            = [string](Get-NestedPropertyValue -Object $item -Path 'id')
+            uri           = [string](Get-NestedPropertyValue -Object $item -Path 'uri')
+            name          = [string](Get-NestedPropertyValue -Object $item -Path 'name')
+            duration_ms   = Get-NestedPropertyValue -Object $item -Path 'duration_ms'
+            external_urls = [PSCustomObject]@{
+                spotify = [string](Get-NestedPropertyValue -Object $item -Path 'external_urls.spotify')
+            }
+            external_ids  = [PSCustomObject]@{
+                isrc = [string](Get-NestedPropertyValue -Object $item -Path 'external_ids.isrc')
+            }
+            artists       = @($artists)
+            album         = [PSCustomObject]@{
+                name = [string](Get-NestedPropertyValue -Object $item -Path 'album.name')
+            }
+        }
+    }
+
+    return [PSCustomObject]@{
+        tracks = [PSCustomObject]@{
+            items = @($items)
+        }
+    }
+}
+
+function Wait-SpotifySearchThrottle {
+    param(
+        [int]$RequestDelayMs
+    )
+
+    if ($RequestDelayMs -le 0 -or $null -eq $script:LastSpotifySearchRequestUtc) {
+        return
+    }
+
+    $elapsedMs = ((Get-Date).ToUniversalTime() - $script:LastSpotifySearchRequestUtc).TotalMilliseconds
+    $remainingMs = $RequestDelayMs - $elapsedMs
+    if ($remainingMs -gt 0) {
+        Start-Sleep -Milliseconds ([int][Math]::Ceiling($remainingMs))
+    }
+}
+
+function Search-SpotifyTracks {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ConfigPath,
+
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Query,
+
+        $SearchCache,
+        [int]$RequestDelayMs = 0
+    )
+
+    $cacheKey = New-SpotifySearchCacheKey -Query $Query
+    if ($SearchCache -and $SearchCache.Entries.ContainsKey($cacheKey)) {
+        $SearchCache.Hits += 1
+        $entry = $SearchCache.Entries[$cacheKey]
+        return $entry.response
+    }
+
+    if ($SearchCache) {
+        $SearchCache.Misses += 1
+    }
+
+    Wait-SpotifySearchThrottle -RequestDelayMs $RequestDelayMs
+    try {
+        $response = Invoke-SpotifyApi -ConfigPath $ConfigPath -Method Get -Endpoint '/search' -Query $Query
+    }
+    finally {
+        $script:LastSpotifySearchRequestUtc = (Get-Date).ToUniversalTime()
+    }
+
+    $cacheResponse = ConvertTo-SpotifySearchCacheResponse -Response $response
+    if ($SearchCache) {
+        $SearchCache.Entries[$cacheKey] = [PSCustomObject]@{
+            cachedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+            query       = $Query
+            response    = $cacheResponse
+        }
+        $SearchCache.Writes += 1
+        Save-SpotifySearchCache -SearchCache $SearchCache
+    }
+
+    return $cacheResponse
 }
 
 function Get-NestedPropertyValue {
@@ -1575,7 +1785,9 @@ function Find-BestSpotifyMatch {
         [Parameter(Mandatory = $true)]
         $Track,
 
-        [string]$Market
+        [string]$Market,
+        $SearchCache,
+        [int]$RequestDelayMs = 0
     )
 
     $candidatesById = @{}
@@ -1590,7 +1802,7 @@ function Find-BestSpotifyMatch {
             $searchParams['market'] = $Market
         }
 
-        $response = Invoke-SpotifyApi -ConfigPath $ConfigPath -Method Get -Endpoint '/search' -Query $searchParams
+        $response = Search-SpotifyTracks -ConfigPath $ConfigPath -Query $searchParams -SearchCache $SearchCache -RequestDelayMs $RequestDelayMs
         $items = @(Get-NestedPropertyValue -Object $response -Path 'tracks.items')
         foreach ($item in $items) {
             if ($null -eq $item) {
@@ -1758,6 +1970,8 @@ function Invoke-PlaylistMigrationCore {
 
     $matched = New-Object System.Collections.Generic.List[object]
     $unmatched = New-Object System.Collections.Generic.List[object]
+    $searchCache = Import-SpotifySearchCache -Path $config.SearchCachePath
+    Write-Host ('Spotify search cache: {0}' -f $searchCache.Path)
 
     $trackList = @($Playlist.Tracks)
     $trackCount = $trackList.Count
@@ -1769,7 +1983,7 @@ function Invoke-PlaylistMigrationCore {
         Write-Host ('[{0}/{1}] Matching: {2}' -f $trackIndex, $trackCount, $trackLabel)
 
         try {
-            $bestMatch = Find-BestSpotifyMatch -ConfigPath $ConfigPath -Track $track -Market $Market
+            $bestMatch = Find-BestSpotifyMatch -ConfigPath $ConfigPath -Track $track -Market $Market -SearchCache $searchCache -RequestDelayMs $config.RequestDelayMs
         }
         catch {
             throw ('Failed while matching track {0}/{1} "{2}": {3}' -f $trackIndex, $trackCount, $trackLabel, $_.Exception.Message)
@@ -1801,6 +2015,8 @@ function Invoke-PlaylistMigrationCore {
         }
     }
     Write-Progress -Activity 'Matching Spotify tracks' -Completed
+    Save-SpotifySearchCache -SearchCache $searchCache
+    Write-Host ('Spotify cache stats: {0} hit(s), {1} miss(es), {2} new cache item(s).' -f $searchCache.Hits, $searchCache.Misses, $searchCache.Writes)
 
     $sourceReport = [PSCustomObject]@{
         provider     = [string]$SourceInfo.Provider
@@ -1832,6 +2048,13 @@ function Invoke-PlaylistMigrationCore {
             public       = [bool]$Public
             market       = $Market
         }
+        spotifySearchCache = [PSCustomObject]@{
+            path    = [string]$searchCache.Path
+            hits    = [int]$searchCache.Hits
+            misses  = [int]$searchCache.Misses
+            writes  = [int]$searchCache.Writes
+            entries = [int]$searchCache.Entries.Count
+        }
         matched   = $matched.ToArray()
         unmatched = $unmatched.ToArray()
     }
@@ -1858,6 +2081,9 @@ function Invoke-PlaylistMigrationCore {
         Unmatched   = $unmatched.ToArray()
         ReportPath  = $resolvedReportPath
         PlaylistUrl = $playlistUrl
+        CacheHits   = [int]$searchCache.Hits
+        CacheMisses = [int]$searchCache.Misses
+        CacheWrites = [int]$searchCache.Writes
     }
 }
 

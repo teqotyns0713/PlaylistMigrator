@@ -17,6 +17,7 @@
 - 支持本地 `CSV`、通用 `JSON`、网易云 `JSON`、QQ 音乐 `JSON`
 - 使用 Spotify 官方 `OAuth PKCE` 登录，不需要 `Client Secret`
 - 自动生成导入报告与错误日志，便于排查匹配问题
+- 内置 Spotify 搜索缓存和轻量节流，减少重复请求和限流风险
 
 ## Requirements
 
@@ -45,6 +46,8 @@ Copy-Item .\config\spotify.sample.json .\config\spotify.json
   "clientId": "YOUR_SPOTIFY_CLIENT_ID",
   "redirectUri": "http://127.0.0.1:8898/callback/",
   "tokenPath": "../data/spotify-token.json",
+  "searchCachePath": "../data/spotify-search-cache.json",
+  "requestDelayMs": 350,
   "defaultMarket": "",
   "scopes": [
     "playlist-modify-private",
@@ -261,6 +264,8 @@ output/last-error.txt
 - 如果想限制 Spotify 搜索市场，可在导入时加 `-Market US` 之类参数
 - 大歌单导入会逐首调用 Spotify 搜索 API，终端会显示当前匹配进度
 - 如果 Spotify 返回很长的 `429 Retry-After`，工具会停止并提示等待时间，而不是在终端里静默等待数小时
+- 默认搜索缓存保存在 `data/spotify-search-cache.json`，想重新匹配时可以删除这个文件
+- `requestDelayMs` 控制 Spotify 搜索请求之间的最小间隔，调大更稳，调小更快但更容易触发限流
 
 ## Development
 
