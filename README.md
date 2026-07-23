@@ -175,6 +175,7 @@ QQ 音乐：
 - `https://y.qq.com/n/ryqq_v2/playlist/...`
 - `https://y.qq.com/n/ryqq/playlist/...`
 - `https://i.y.qq.com/n2/m/share/details/taoge.html?id=...`
+- `https://i2.y.qq.com/n3/other/pages/details/playlist.html?id=...`
 
 也支持直接粘贴分享文案，脚本会自动从文本里提取链接。
 
@@ -258,6 +259,8 @@ output/last-error.txt
 - 因版权、地区或 Spotify 收录差异，部分歌曲可能无法匹配
 - 如果平台后续调整分享链接或接口结构，抓取逻辑可能需要更新
 - 如果想限制 Spotify 搜索市场，可在导入时加 `-Market US` 之类参数
+- 大歌单导入会逐首调用 Spotify 搜索 API，终端会显示当前匹配进度
+- 如果 Spotify 返回很长的 `429 Retry-After`，工具会停止并提示等待时间，而不是在终端里静默等待数小时
 
 ## Development
 

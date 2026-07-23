@@ -4,6 +4,8 @@ $ErrorActionPreference = 'Stop'
 
 $script:SpotifyApiBase = 'https://api.spotify.com/v1'
 $script:SpotifyAccountsBase = 'https://accounts.spotify.com'
+$script:SpotifyRequestTimeoutSeconds = 30
+$script:SpotifyMaxAutoRetryAfterSeconds = 60
 
 function Resolve-AbsolutePath {
     param(
@@ -402,6 +404,7 @@ function Invoke-SpotifyTokenRequest {
             -Uri ($script:SpotifyAccountsBase + '/api/token') `
             -ContentType 'application/x-www-form-urlencoded' `
             -Body $Body `
+            -TimeoutSec $script:SpotifyRequestTimeoutSeconds `
             -ErrorAction Stop
     }
     catch {
@@ -584,6 +587,7 @@ function Invoke-SpotifyApi {
         Uri         = $uri
         Headers     = @{ Authorization = 'Bearer ' + [string]$session.Token.accessToken }
         ErrorAction = 'Stop'
+        TimeoutSec  = $script:SpotifyRequestTimeoutSeconds
     }
 
     $hasBody = $PSBoundParameters.ContainsKey('Body')
@@ -622,22 +626,30 @@ function Invoke-SpotifyApi {
 
         if ($statusCode -eq 429) {
             $retryAfter = $response.Headers['Retry-After']
-            if ($retryAfter) {
-                Start-Sleep -Seconds ([int]$retryAfter)
+            $retryAfterSeconds = 0
+            if ($retryAfter -and [int]::TryParse([string]$retryAfter, [ref]$retryAfterSeconds) -and $retryAfterSeconds -gt 0) {
+                if ($retryAfterSeconds -le $script:SpotifyMaxAutoRetryAfterSeconds) {
+                    Write-Warning ('Spotify rate limit reached. Retrying after {0} seconds.' -f $retryAfterSeconds)
+                    Start-Sleep -Seconds $retryAfterSeconds
 
-                $retryParams = @{
-                    ConfigPath       = $ConfigPath
-                    Method           = $Method
-                    Endpoint         = $Endpoint
-                    Query            = $Query
-                    RefreshRetryUsed = [bool]$RefreshRetryUsed
-                }
-                if ($hasBody) {
-                    $retryParams['Body'] = $Body
+                    $retryParams = @{
+                        ConfigPath       = $ConfigPath
+                        Method           = $Method
+                        Endpoint         = $Endpoint
+                        Query            = $Query
+                        RefreshRetryUsed = [bool]$RefreshRetryUsed
+                    }
+                    if ($hasBody) {
+                        $retryParams['Body'] = $Body
+                    }
+
+                    return Invoke-SpotifyApi @retryParams
                 }
 
-                return Invoke-SpotifyApi @retryParams
+                throw ('Spotify API rate limit reached for {0} {1}. Spotify asked to retry after {2} seconds, so the tool stopped instead of waiting for hours.' -f ([string]$Method).ToUpperInvariant(), $Endpoint, $retryAfterSeconds)
             }
+
+            throw ('Spotify API rate limit reached for {0} {1}. Try again later.' -f ([string]$Method).ToUpperInvariant(), $Endpoint)
         }
 
         throw (Get-HttpErrorMessage -ErrorRecord $_ -Context ('Spotify API request failed for {0} {1}' -f ([string]$Method).ToUpperInvariant(), $Endpoint))
@@ -998,7 +1010,7 @@ function Get-ShareLinkCandidate {
     }
 
     $candidate = $null
-    $domainMatch = [regex]::Match($normalizedText, '((?:https?://)?(?:music\.163\.com|y\.music\.163\.com|y\.qq\.com|i\.y\.qq\.com)[^\s"''<>]+)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    $domainMatch = [regex]::Match($normalizedText, '((?:https?://)?(?:(?:[\w-]+\.)*music\.163\.com|(?:[\w-]+\.)*y\.qq\.com)[^\s"''<>]+)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
     if ($domainMatch.Success) {
         $candidate = $domainMatch.Groups[1].Value
     }
@@ -1007,7 +1019,7 @@ function Get-ShareLinkCandidate {
         if ($genericMatch.Success) {
             $candidate = $genericMatch.Groups[1].Value
         }
-        elseif ($normalizedText -match '^(?:music\.163\.com|y\.music\.163\.com|y\.qq\.com|i\.y\.qq\.com)\b') {
+        elseif ($normalizedText -match '^(?:(?:[\w-]+\.)*music\.163\.com|(?:[\w-]+\.)*y\.qq\.com)\b') {
             $candidate = 'https://' + $normalizedText
         }
     }
@@ -1030,6 +1042,30 @@ function Get-ProviderLabel {
         'netease' { return 'NetEase Cloud Music' }
         'qqmusic' { return 'QQ Music' }
     }
+}
+
+function Get-SourcePlaylistDisplayName {
+    param(
+        [string]$Name,
+        [string]$Provider,
+        [string]$ProviderPlaylistId
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($Name)) {
+        return $Name.Trim()
+    }
+
+    $providerLabel = switch ($Provider) {
+        'netease' { 'NetEase Cloud Music' }
+        'qqmusic' { 'QQ Music' }
+        default { 'Source' }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ProviderPlaylistId)) {
+        return ('{0} Playlist {1}' -f $providerLabel, $ProviderPlaylistId)
+    }
+
+    return ('{0} Playlist' -f $providerLabel)
 }
 
 function Resolve-PlaylistShareLink {
@@ -1216,7 +1252,7 @@ function Get-QQMusicPlaylistFromShareLink {
         ProviderLabel     = Get-ProviderLabel -Provider 'qqmusic'
         ProviderPlaylistId = [string]$firstPage.dirinfo.id
         SourceUrl         = $SourceUrl
-        Name              = [string]$firstPage.dirinfo.title
+        Name              = Get-SourcePlaylistDisplayName -Name ([string]$firstPage.dirinfo.title) -Provider 'qqmusic' -ProviderPlaylistId $PlaylistId
         Description       = [string]$firstPage.dirinfo.desc
         Creator           = [string]$firstPage.dirinfo.host_nick
         TrackCount        = @($tracks).Count
@@ -1309,7 +1345,7 @@ function Get-NeteasePlaylistFromShareLink {
         ProviderLabel      = Get-ProviderLabel -Provider 'netease'
         ProviderPlaylistId = [string]$response.playlist.id
         SourceUrl          = $SourceUrl
-        Name               = [string]$response.playlist.name
+        Name               = Get-SourcePlaylistDisplayName -Name ([string]$response.playlist.name) -Provider 'netease' -ProviderPlaylistId ([string]$response.playlist.id)
         Description        = [string]$response.playlist.description
         Creator            = [string]$response.playlist.creator.nickname
         TrackCount         = @($tracks).Count
@@ -1695,14 +1731,20 @@ function Invoke-PlaylistMigrationCore {
         [switch]$OpenBrowser
     )
 
-    if ([string]::IsNullOrWhiteSpace($PlaylistName)) {
-        $PlaylistName = '{0} (Imported)' -f $Playlist.Name
-    }
-
     $config = Resolve-Config -ConfigPath $ConfigPath
     $resolvedReportPath = Resolve-AbsolutePath -Path $ReportPath -BaseDirectory (Get-Location).Path
     if (-not $Market) {
         $Market = $config.DefaultMarket
+    }
+
+    $sourceProvider = [string]$SourceInfo.Provider
+    $sourcePlaylistId = $null
+    if ($SourceInfo.PSObject.Properties['ProviderPlaylistId']) {
+        $sourcePlaylistId = [string]$SourceInfo.ProviderPlaylistId
+    }
+    $sourcePlaylistName = Get-SourcePlaylistDisplayName -Name ([string]$Playlist.Name) -Provider $sourceProvider -ProviderPlaylistId $sourcePlaylistId
+    if ([string]::IsNullOrWhiteSpace($PlaylistName)) {
+        $PlaylistName = '{0} (Imported)' -f $sourcePlaylistName
     }
 
     if (-not (Test-Path -LiteralPath $config.TokenPath)) {
@@ -1717,9 +1759,24 @@ function Invoke-PlaylistMigrationCore {
     $matched = New-Object System.Collections.Generic.List[object]
     $unmatched = New-Object System.Collections.Generic.List[object]
 
-    foreach ($track in $Playlist.Tracks) {
-        $bestMatch = Find-BestSpotifyMatch -ConfigPath $ConfigPath -Track $track -Market $Market
+    $trackList = @($Playlist.Tracks)
+    $trackCount = $trackList.Count
+    $trackIndex = 0
+    foreach ($track in $trackList) {
+        $trackIndex += 1
+        $trackLabel = ('{0} - {1}' -f $track.Title, $track.ArtistText).Trim(' ', '-')
+        Write-Progress -Activity 'Matching Spotify tracks' -Status ('{0}/{1} {2}' -f $trackIndex, $trackCount, $trackLabel) -PercentComplete ([int](($trackIndex - 1) * 100 / [Math]::Max(1, $trackCount)))
+        Write-Host ('[{0}/{1}] Matching: {2}' -f $trackIndex, $trackCount, $trackLabel)
+
+        try {
+            $bestMatch = Find-BestSpotifyMatch -ConfigPath $ConfigPath -Track $track -Market $Market
+        }
+        catch {
+            throw ('Failed while matching track {0}/{1} "{2}": {3}' -f $trackIndex, $trackCount, $trackLabel, $_.Exception.Message)
+        }
+
         if ($bestMatch) {
+            Write-Host ('[{0}/{1}] Matched: {2} -> {3} - {4}' -f $trackIndex, $trackCount, $trackLabel, [string]$bestMatch.Candidate.name, [string]$bestMatch.CandidateArtists)
             $matched.Add([PSCustomObject]@{
                     SourceTitle     = $track.Title
                     SourceArtist    = $track.ArtistText
@@ -1734,6 +1791,7 @@ function Invoke-PlaylistMigrationCore {
                 })
         }
         else {
+            Write-Host ('[{0}/{1}] Unmatched: {2}' -f $trackIndex, $trackCount, $trackLabel) -ForegroundColor Yellow
             $unmatched.Add([PSCustomObject]@{
                     SourceTitle  = $track.Title
                     SourceArtist = $track.ArtistText
@@ -1742,11 +1800,12 @@ function Invoke-PlaylistMigrationCore {
                 })
         }
     }
+    Write-Progress -Activity 'Matching Spotify tracks' -Completed
 
     $sourceReport = [PSCustomObject]@{
         provider     = [string]$SourceInfo.Provider
-        playlistName = $Playlist.Name
-        trackCount   = $Playlist.Tracks.Count
+        playlistName = $sourcePlaylistName
+        trackCount   = $trackCount
     }
     if ($SourceInfo.PSObject.Properties['SourcePath']) {
         $sourceReport | Add-Member -NotePropertyName sourcePath -NotePropertyValue ([string]$SourceInfo.SourcePath) -Force
