@@ -1,4 +1,4 @@
-﻿# PlaylistMigrator
+# PlaylistMigrator
 
 将 `QQ 音乐`、`网易云音乐` 的歌单迁移到 `Spotify` 的 PowerShell 工具。
 
@@ -61,6 +61,13 @@ Copy-Item .\config\spotify.sample.json .\config\spotify.json
 ```powershell
 .\start-migrator.cmd
 ```
+
+## Security
+
+- Do not commit `config/spotify.json`, `data/spotify-token.json`, or any file containing Spotify tokens.
+- The sample config only contains placeholders. Each user should create and use their own Spotify Developer App.
+- The most sensitive value is the Spotify `refreshToken`, because it can be used to refresh access to your Spotify account.
+- See [SECURITY.md](SECURITY.md) for what is safe to share and what to do if a token is leaked.
 
 ## Recommended Flow
 
