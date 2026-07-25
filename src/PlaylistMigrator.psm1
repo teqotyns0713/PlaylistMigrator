@@ -462,17 +462,17 @@ function Save-SpotifyToken {
         [string]$ExistingRefreshToken
     )
 
-    $refreshToken = [string]$Response.refresh_token
+    $refreshToken = [string](Get-ObjectPropertyValue -Object $Response -Name 'refresh_token')
     if ([string]::IsNullOrWhiteSpace($refreshToken)) {
         $refreshToken = $ExistingRefreshToken
     }
 
     $token = [PSCustomObject]@{
-        accessToken  = [string]$Response.access_token
+        accessToken  = [string](Get-ObjectPropertyValue -Object $Response -Name 'access_token')
         refreshToken = $refreshToken
-        tokenType    = [string]$Response.token_type
-        scope        = [string]$Response.scope
-        expiresAtUtc = (Get-Date).ToUniversalTime().AddSeconds([int]$Response.expires_in).ToString('o')
+        tokenType    = [string](Get-ObjectPropertyValue -Object $Response -Name 'token_type')
+        scope        = [string](Get-ObjectPropertyValue -Object $Response -Name 'scope')
+        expiresAtUtc = (Get-Date).ToUniversalTime().AddSeconds([int](Get-ObjectPropertyValue -Object $Response -Name 'expires_in')).ToString('o')
     }
 
     Write-JsonFile -Path $Config.TokenPath -Value $token
